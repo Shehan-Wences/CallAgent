@@ -41,7 +41,10 @@ def load_campaign(path: str | Path) -> Campaign:
     if not path.exists():
         raise CampaignError(f"Campaign file not found: {path}")
     raw_yaml, body = _split_front_matter(path.read_text())
-    data = yaml.safe_load(raw_yaml) or {}
+    try:
+        data = yaml.safe_load(raw_yaml) or {}
+    except yaml.YAMLError as exc:
+        raise CampaignError(f"Front-matter YAML is invalid: {exc}") from exc
     if not isinstance(data, dict):
         raise CampaignError("Front-matter did not parse to a mapping.")
 

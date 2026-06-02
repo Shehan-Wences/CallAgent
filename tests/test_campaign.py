@@ -77,3 +77,15 @@ def test_missing_front_matter_raises(tmp_path):
     p.write_text("no front matter here")
     with pytest.raises(CampaignError):
         load_campaign(p)
+
+def test_unclosed_front_matter_raises(tmp_path):
+    p = tmp_path / "c.md"
+    p.write_text("---\nproduct:\n  name: foo\n")   # opening --- but no closing ---
+    with pytest.raises(CampaignError):
+        load_campaign(p)
+
+def test_malformed_yaml_raises_campaign_error(tmp_path):
+    p = tmp_path / "c.md"
+    p.write_text('---\nproduct: "unclosed\n---\n')   # invalid YAML inside front-matter
+    with pytest.raises(CampaignError):
+        load_campaign(p)
