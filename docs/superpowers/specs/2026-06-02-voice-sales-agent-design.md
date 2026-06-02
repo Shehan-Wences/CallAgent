@@ -37,10 +37,12 @@ else.
 |---|---|
 | Audio scope | Full realtime speech-to-speech |
 | Stack | OpenAI Realtime API via the OpenAI **Agents SDK** (`RealtimeAgent`), Python |
+| Model | `gpt-realtime-mini` for dev/test (cheap), `gpt-realtime` (flagship) for prod; selectable via `--model` |
 | Config format | Hybrid: YAML front-matter + Markdown body |
 | Call goal | Book a follow-up (`book_slot`), plus `log_outcome` |
 | Disclosure | Disclose if asked; stay strictly truthful (guardrails in config) |
 | Transport | Isolated behind an interface; `LocalMicTransport` for Phase 1 |
+| Cost control | Prompt caching enabled; stable instruction prefix per call (see Cost model) |
 
 ## Architecture
 
@@ -184,6 +186,60 @@ TDD for the brain; manual testing for live audio.
 - **Realtime/audio layer** — manually tested by talking to it. Not
   unit-tested (live audio). It is isolated precisely so everything around it is
   testable.
+
+## Cost model & model selection
+
+Verified against the official OpenAI developer pricing page
+(<https://developers.openai.com/api/docs/pricing>) and Realtime cost guide
+(<https://developers.openai.com/api/docs/guides/realtime-costs>) on 2026-06-02.
+The flagship `gpt-realtime` and mini audio rates were independently
+re-verified at high confidence; treat all numbers as a snapshot — re-check the
+live page before relying on them for billing.
+
+**Per-1M-token rates (USD):**
+
+| Model | Audio in | Cached audio in | Audio out | Text in | Text out |
+|---|---|---|---|---|---|
+| `gpt-realtime` (flagship, alias → `gpt-realtime-2`) | $32 | $0.40 | $64 | $4 | $16–24* |
+| `gpt-realtime-mini` | $10 | $0.30 | $20 | $0.60 | $2.40 |
+| `gpt-4o-realtime-preview` (legacy) | $40 | $2.50 | $80 | $5 | $20 |
+
+\*Two official pages disagreed on flagship text output ($16 vs $24); low
+confidence, immaterial to voice cost.
+
+**Audio tokenization (official):** input audio = 1 token / 100 ms = ~600
+tokens/min; output audio = 1 token / 50 ms = ~1,200 tokens/min. Independent of
+model.
+
+**Dominant cost lever — prompt caching.** Without caching, the system prompt and
+the growing conversation context are re-billed as audio/text input on every
+turn, pushing real cost well above the talk-only floor. With caching, that
+prefix bills at the cached rate (~99% cheaper on the flagship). **Requirement:**
+the compiled instruction prefix MUST be stable for the duration of a call so
+OpenAI caches it — the `InstructionBuilder` already emits a fixed per-call
+prefix; do not interpolate per-turn data into it.
+
+**Estimated cost (caching on, ~4-minute call):**
+
+| Scenario | $/min | ~4-min call | per 1,000 calls |
+|---|---|---|---|
+| Flagship, no caching | $0.18–0.46 | $0.72–1.84 | $720–1,840 |
+| Flagship, caching on (prod) | $0.05–0.10 | $0.20–0.40 | $200–400 |
+| Mini, caching on (dev/test) | ~$0.02–0.04 | ~$0.08–0.16 | ~$80–160 |
+| + Twilio transport (Phase 2 only) | +$0.018 | +$0.07 | +$72 |
+
+Ranges for the flagship corroborated by a third-party measured breakdown
+(CallSphere, 5-min example: $0.125/min uncached → $0.056/min cached). These are
+estimates, not OpenAI-published per-minute figures (realtime is billed per
+token).
+
+**Phase 2 Twilio transport** (verified <https://www.twilio.com/en-us/voice/pricing/us>):
+outbound US voice $0.0140/min + Media Streams (bidirectional) $0.0040/min ≈
+$0.018/min, plus ~$1.15/mo per local number. Excludes the model cost above.
+
+**Implication for the build:** default the CLI to `gpt-realtime-mini` so Phase 1
+iteration is nearly free; promote to `gpt-realtime` via `--model` for
+production-quality voice. Enable prompt caching in the session config.
 
 ## Future phases (context, not in scope now)
 
