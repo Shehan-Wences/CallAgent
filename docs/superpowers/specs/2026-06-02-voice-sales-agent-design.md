@@ -7,10 +7,12 @@
 
 A realtime voice agent that holds a persuasive sales conversation about a
 configurable product and drives toward **booking a follow-up**. Phase 1 builds
-the *agent that talks* — native speech-to-speech via the OpenAI Realtime API,
-tested locally through mic/speaker. It is **not** wired to a phone line; the
-telephony layer (Twilio) is a later phase and plugs into an isolated transport
-seam.
+the *agent that talks* — native speech-to-speech via the OpenAI Realtime API.
+You run it with Docker and **talk to it in your browser**: the browser captures
+your mic and plays the agent's voice, while the container runs the agent brain,
+tools, and the bridge to OpenAI. It is **not** wired to a phone line; the
+telephony layer (Twilio) is a later phase and plugs into the same isolated
+transport seam.
 
 The agent is retargeted to a new product by editing a single hybrid config file
 (YAML front-matter + Markdown body). No code changes needed to sell something
@@ -29,7 +31,8 @@ else.
 - No phone/telephony integration (no Twilio yet).
 - No real calendar/CRM sync — bookings persist to a local JSON file.
 - No multi-language support (English only for now).
-- No config UI — the YAML/Markdown file is edited by hand.
+- No config UI — the YAML/Markdown file is edited by hand. (The browser page is a
+  minimal "call console" — start/stop a call, see status — not a config editor.)
 
 ## Decisions
 
@@ -41,33 +44,38 @@ else.
 | Config format | Hybrid: YAML front-matter + Markdown body |
 | Call goal | Book a follow-up (`book_slot`), plus `log_outcome` |
 | Disclosure | Disclose if asked; stay strictly truthful (guardrails in config) |
-| Transport | Isolated behind an interface; `LocalMicTransport` for Phase 1 |
+| Transport | Isolated behind an interface; `BrowserWebSocketTransport` (browser mic ↔ container) for Phase 1 |
+| Packaging | Dockerized server (FastAPI + WebSocket); talk to the agent at `http://localhost:8000` |
 | Cost control | Prompt caching enabled; stable instruction prefix per call (see Cost model) |
 
 ## Architecture
 
 ```
-campaigns/*.md  ──►  CampaignLoader  ──►  Campaign (validated)
-                                              │
-                                              ▼
-                                       InstructionBuilder  ──►  system prompt
-                                              │
-                                              ▼
-          ┌─────────────────  RealtimeSalesAgent  ─────────────────┐
-          │   (OpenAI RealtimeAgent: instructions + tools + VAD)   │
-          └───────┬───────────────────────────────────┬───────────┘
-                  │ audio in/out                       │ tool calls
-                  ▼                                     ▼
-          AudioTransport (interface)            Tools: book_slot, log_outcome
-          └─ LocalMicTransport (Phase 1)               │
-          └─ TwilioTransport (Phase 2, later)          ▼
-                                              BookingStore (JSON file)
+ Browser "call console"  ◄── mic capture / speaker playback (Web Audio)
+        │  ▲
+        │  │  WebSocket (PCM audio frames + control msgs)
+        ▼  │
+┌─────────────────────────  Docker container  ─────────────────────────┐
+│                                                                       │
+│  campaigns/*.md ─► CampaignLoader ─► Campaign ─► InstructionBuilder    │
+│                                                        │ instructions  │
+│                                                        ▼               │
+│  AppServer (FastAPI + WS)  ──►  RealtimeSalesAgent  ──►  OpenAI         │
+│        ▲ audio bridge          (RealtimeAgent +         Realtime API   │
+│        │                        tools + VAD)            (speech↔speech)│
+│        │                              │ tool calls                     │
+│   AudioTransport (interface)          ▼                                │
+│   └─ BrowserWebSocketTransport   Tools: book_slot, log_outcome         │
+│   └─ TwilioTransport (Phase 2)        │                                │
+│                                       ▼                                │
+│                              BookingStore (JSON file, mounted volume)  │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 **Separation principle:** the *brain* (campaign → instructions → conversation +
-tools) knows nothing about *where* audio comes from. Phase 2 replaces
-`LocalMicTransport` with a Twilio media-stream transport without touching the
-brain.
+tools) knows nothing about *where* audio comes from. `AudioTransport` is the
+seam: Phase 1 uses `BrowserWebSocketTransport`; Phase 2 swaps in a Twilio
+media-stream transport (also a WebSocket bridge) without touching the brain.
 
 ## Components
 
@@ -84,17 +92,31 @@ Each component has one job, a clear interface, and known dependencies.
   objection guidance. No I/O. *Depends on:* nothing — trivially testable.
 - **RealtimeSalesAgent** — wraps OpenAI `RealtimeAgent`/session: applies
   instructions, registers tools, runs the conversation loop, speaks the
-  opening line. *Depends on:* OpenAI Agents SDK, an AudioTransport, the tools.
-- **AudioTransport** (interface) — streams audio in/out. `LocalMicTransport`
-  (sounddevice mic + speaker) is the Phase 1 implementation and the seam Phase
-  2 plugs into.
+  opening line. Pulls input audio from / pushes output audio to an
+  `AudioTransport`; never touches a real device. *Depends on:* OpenAI Agents
+  SDK, an AudioTransport, the tools.
+- **AudioTransport** (interface) — async `recv_audio()` / `send_audio(frames)`
+  plus a `close()`. Phase 1 impl is **BrowserWebSocketTransport**, which carries
+  PCM frames over the browser WebSocket. The seam Phase 2's Twilio transport
+  plugs into.
+- **AppServer** — FastAPI app. Serves the static browser console, exposes a
+  `/session` WebSocket endpoint, and on connect wires a
+  `BrowserWebSocketTransport` to a fresh `RealtimeSalesAgent` for that call.
+  Holds the `OPENAI_API_KEY` (server-side only — never sent to the browser).
+  *Depends on:* FastAPI/uvicorn, RealtimeSalesAgent.
+- **Browser console** — one static HTML/JS page: a "Start call" / "End call"
+  button and a status line. Captures mic via Web Audio, resamples to the PCM
+  format OpenAI expects, streams frames over the WebSocket, and plays returned
+  audio. No framework — vanilla JS to keep it trivial.
 - **Tools** — `book_slot` and `log_outcome`, writing through **BookingStore**.
 - **BookingStore** — thin wrapper over an append-only JSON file. Isolated so a
   real DB/calendar can replace it later. *Timestamps are passed in by the tool
   layer* (the store does no clock access itself), keeping it deterministic and
   testable.
-- **CLI** — `python -m sales_agent run --campaign campaigns/widget.md
-  [--lead-name NAME]`.
+- **Config / CLI** — the server reads `CAMPAIGN` (path), `MODEL`, and
+  `OPENAI_API_KEY` from env (so `docker run -e ...` configures a call). A thin
+  CLI entry (`python -m sales_agent serve`) starts the server for non-Docker
+  local runs.
 
 ## Campaign config file
 
@@ -143,7 +165,8 @@ defaults. The Markdown body is optional but recommended — it is injected
 wholesale as product knowledge.
 
 `{name}` is a placeholder filled from per-call context. Phase 1 supplies it via
-a `--lead-name` flag (default: "there").
+a `lead_name` query param on the WebSocket / browser console field (default:
+"there").
 
 ## Tools
 
@@ -156,14 +179,18 @@ a `--lead-name` flag (default: "there").
 
 ## Data flow (one call)
 
-1. CLI loads campaign → InstructionBuilder → system prompt.
-2. RealtimeSalesAgent starts a Realtime session with instructions + tools;
-   speaks the `opening_line`.
-3. LocalMicTransport streams mic audio up; server VAD detects turns; the agent
-   responds with audio.
+1. Browser opens `http://localhost:8000`; user clicks **Start call** → browser
+   opens a WebSocket to `/session?lead_name=...`.
+2. AppServer loads the campaign (once, at startup) → InstructionBuilder → system
+   prompt; on the WS connect it spins up a `RealtimeSalesAgent` bound to a
+   `BrowserWebSocketTransport` for this call and opens the OpenAI Realtime
+   session (instructions + tools). The agent speaks the `opening_line`.
+3. Browser streams mic PCM frames over the WS → transport → OpenAI; server VAD
+   detects turns; the agent's audio streams back over the WS and plays in the
+   browser.
 4. When the lead agrees, the agent calls `book_slot` → BookingStore writes the
    record → the agent confirms aloud.
-5. The agent calls `log_outcome` → the session ends.
+5. The agent calls `log_outcome` → the session ends and the WS closes.
 
 ## Error handling
 
@@ -186,9 +213,38 @@ TDD for the brain; manual testing for live audio.
   produce different prompts.
 - **Tools / BookingStore** — `book_slot` and `log_outcome` write correct
   records to a temp store; bad inputs are handled.
-- **Realtime/audio layer** — manually tested by talking to it. Not
-  unit-tested (live audio). It is isolated precisely so everything around it is
-  testable.
+- **BrowserWebSocketTransport** — unit-tested with a fake WebSocket: frames sent
+  in arrive at `recv_audio()`; frames passed to `send_audio()` go out; `close()`
+  tears down cleanly. (Pure plumbing, no real audio device — so it *is*
+  testable.)
+- **AppServer** — a smoke test using FastAPI's `TestClient` WebSocket: connect
+  to `/session`, assert the session starts and the opening line is emitted
+  (OpenAI call mocked).
+- **OpenAI Realtime round-trip** — manually tested by talking to it in the
+  browser. Not unit-tested (live audio + paid API). Everything *around* it is
+  isolated precisely so it can be mocked.
+
+## Packaging & running (Docker)
+
+The whole agent runs as one container.
+
+- **Dockerfile** — `python:3.12-slim` base; install deps from
+  `requirements.txt` (or `pyproject.toml`); copy `src/` + `campaigns/` + the
+  static browser page; `EXPOSE 8000`; `CMD` launches uvicorn serving AppServer.
+- **docker-compose.yml** — one service: maps `8000:8000`, reads
+  `OPENAI_API_KEY` from the host env / `.env`, sets `CAMPAIGN` and `MODEL`, and
+  mounts a volume for `bookings.json` so bookings survive container restarts.
+- **Run:**
+  ```bash
+  export OPENAI_API_KEY=sk-...
+  docker compose up --build
+  # open http://localhost:8000, click "Start call", talk
+  ```
+- **Swap product:** point `CAMPAIGN` at a different file under the mounted
+  `campaigns/` dir and restart — no rebuild.
+- **macOS note:** the container never touches a host audio device (that doesn't
+  work in Docker Desktop); all mic/speaker I/O happens in the browser, which is
+  exactly why the transport is browser-based.
 
 ## Cost model & model selection
 
