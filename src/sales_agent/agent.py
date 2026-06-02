@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import os
 from typing import Awaitable, Callable
 from agents.realtime import RealtimeAgent, RealtimeRunner
 
@@ -9,6 +10,26 @@ GREETING_TRIGGER = (
 )
 
 SessionFactory = Callable[[str, str, str, list], Awaitable[object]]
+
+
+def _turn_detection() -> dict:
+    """Voice-activity detection tuned to avoid interrupting on slight sounds.
+
+    Server VAD with a raised threshold + longer trailing silence is far less
+    twitchy than the default. Tunable at runtime via env without a rebuild:
+      VAD_THRESHOLD   (0.0-1.0, higher = needs louder speech to trigger; default 0.6)
+      VAD_SILENCE_MS  (ms of silence before the caller's turn ends; default 800)
+    """
+    return {
+        "type": "server_vad",
+        "threshold": float(os.environ.get("VAD_THRESHOLD", "0.6")),
+        "prefix_padding_ms": int(os.environ.get("VAD_PREFIX_MS", "300")),
+        "silence_duration_ms": int(os.environ.get("VAD_SILENCE_MS", "800")),
+        # Genuine barge-in still works; the higher threshold + browser echo
+        # cancellation stop the agent from interrupting itself.
+        "interrupt_response": os.environ.get("VAD_INTERRUPT", "true").lower() != "false",
+    }
+
 
 async def default_session_factory(instructions: str, voice: str, model: str, tools: list):
     agent = RealtimeAgent(name="sales_agent", instructions=instructions, tools=tools)
@@ -21,7 +42,9 @@ async def default_session_factory(instructions: str, voice: str, model: str, too
                 "audio": {
                     "input": {
                         "format": "pcm16",
-                        "turn_detection": {"type": "semantic_vad", "interrupt_response": True},
+                        "turn_detection": _turn_detection(),
+                        # Suppress background noise so it doesn't trip the VAD.
+                        "noise_reduction": {"type": "near_field"},
                         # Transcribe the caller's speech so the browser can show a live transcript.
                         "transcription": {"model": "gpt-4o-mini-transcribe"},
                     },

@@ -39,3 +39,12 @@ def test_opening_line_placeholder_filled():
     out = build_instructions(_campaign(opening_line="Hello {name}!"), lead_name="Dana")
     assert "Hello Dana!" in out
     assert "{name}" not in out
+
+def test_accent_included_when_set():
+    persona = {"name": "Alex", "role": "rep", "tone": "warm", "voice": "marin", "accent": "Australian"}
+    out = build_instructions(_campaign(persona=persona), lead_name="Dana")
+    assert "natural Australian accent" in out
+
+def test_accent_absent_when_not_set():
+    out = build_instructions(_campaign(), lead_name="Dana")
+    assert "accent" not in out.lower()

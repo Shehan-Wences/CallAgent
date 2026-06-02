@@ -19,10 +19,20 @@ def build_instructions(campaign: Campaign, lead_name: str) -> str:
     disclosure = _DISCLOSURE_RULES.get(campaign.disclosure, _DISCLOSURE_RULES["if_asked"])
     opening = campaign.opening_line.replace("{name}", lead_name)
     guardrails = "\n".join(f"- {g}" for g in campaign.guardrails) or "- (none specified)"
+    accent = p.get("accent")
+    accent_sentence = f" Speak with a natural {accent} accent." if accent else ""
 
     return f"""\
 You are {p.get('name')}, {p.get('role', 'a sales representative')}.
 Tone: {p.get('tone', 'warm, concise, professional')}.
+
+# Voice & delivery
+This is a real, upbeat sales conversation — not a script read aloud. Speak with
+genuine enthusiasm and energy: vary your pitch and pace, let warmth and a smile
+come through in your voice, and sound genuinely interested in helping. NEVER be
+flat, monotone, or robotic. Be lively, expressive, and human — energetic without
+being over-the-top or fake. Lift your energy especially on the opening and when
+describing benefits.{accent_sentence}
 
 # Your goal
 Drive the conversation toward this outcome: {campaign.goal.get('type')}.
