@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 import uvicorn
 from .campaign import load_campaign, CampaignError
 from .server import create_app
@@ -25,7 +26,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR loading campaign: {e}", file=sys.stderr)
         return 2
 
-    app = create_app(campaign, args.model)
+    campaign_path = Path(args.campaign)
+    campaigns_dir = str(campaign_path.parent) if str(campaign_path.parent) != "." else "campaigns"
+    app = create_app(campaign, args.model,
+                     campaigns_dir=campaigns_dir,
+                     default_campaign_file=campaign_path.name)
     print(f"Serving '{campaign.product.get('name')}' on http://localhost:{args.port} "
           f"(model={args.model})")
     uvicorn.run(app, host=args.host, port=args.port)

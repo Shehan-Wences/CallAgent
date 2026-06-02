@@ -7,6 +7,7 @@ from starlette.websockets import WebSocketDisconnect
 class AudioTransport(Protocol):
     async def recv_audio(self) -> bytes | None: ...
     async def send_audio(self, audio: bytes) -> None: ...
+    async def send_event(self, event: dict) -> None: ...
     async def notify_interrupted(self) -> None: ...
     async def close(self) -> None: ...
 
@@ -30,8 +31,12 @@ class BrowserWebSocketTransport:
     async def send_audio(self, audio: bytes) -> None:
         await self._ws.send_bytes(audio)
 
+    async def send_event(self, event: dict) -> None:
+        """Send a JSON control/data message (e.g. transcript) to the browser."""
+        await self._ws.send_text(json.dumps(event))
+
     async def notify_interrupted(self) -> None:
-        await self._ws.send_text(json.dumps({"type": "interrupted"}))
+        await self.send_event({"type": "interrupted"})
 
     async def close(self) -> None:
         if self._closed:

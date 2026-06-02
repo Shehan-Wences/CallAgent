@@ -41,6 +41,14 @@ async def test_notify_interrupted_sends_control_text():
     await t.notify_interrupted()
     assert any("interrupted" in m for m in ws.sent_text)
 
+async def test_send_event_serializes_json():
+    import json
+    ws = FakeWS([])
+    t = BrowserWebSocketTransport(ws)
+    await t.send_event({"type": "transcript", "role": "user", "text": "hi"})
+    assert len(ws.sent_text) == 1
+    assert json.loads(ws.sent_text[0]) == {"type": "transcript", "role": "user", "text": "hi"}
+
 async def test_close_closes_ws_once():
     ws = FakeWS([])
     t = BrowserWebSocketTransport(ws)

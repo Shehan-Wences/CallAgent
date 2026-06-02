@@ -22,6 +22,8 @@ async def default_session_factory(instructions: str, voice: str, model: str, too
                     "input": {
                         "format": "pcm16",
                         "turn_detection": {"type": "semantic_vad", "interrupt_response": True},
+                        # Transcribe the caller's speech so the browser can show a live transcript.
+                        "transcription": {"model": "gpt-4o-mini-transcribe"},
                     },
                     "output": {"format": "pcm16", "voice": voice},
                 },
@@ -71,3 +73,18 @@ class RealtimeSalesAgent:
                 await transport.send_audio(event.audio.data)
             elif event.type == "audio_interrupted":
                 await transport.notify_interrupted()
+            elif event.type == "raw_model_event":
+                await self._forward_transcript(event.data, transport)
+
+    async def _forward_transcript(self, data, transport) -> None:
+        """Relay transcript events to the browser as JSON for the live transcript."""
+        if data.type == "transcript_delta":  # streaming agent (assistant) speech
+            await transport.send_event({
+                "type": "transcript", "role": "assistant",
+                "item_id": data.item_id, "delta": data.delta, "final": False,
+            })
+        elif data.type == "input_audio_transcription_completed":  # caller (user) speech
+            await transport.send_event({
+                "type": "transcript", "role": "user",
+                "item_id": data.item_id, "text": data.transcript, "final": True,
+            })

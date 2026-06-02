@@ -5,28 +5,126 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Sales Agent — Call Console</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; }
-  button { font-size: 1rem; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; }
-  #status { margin-top: 1rem; color: #555; }
-  label { display: block; margin-bottom: 1rem; }
-  input { font-size: 1rem; padding: 0.4rem; width: 12rem; }
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
+  h1 { margin-bottom: 0.5rem; }
+  .row { display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 1rem; }
+  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #444; gap: 0.25rem; }
+  input, select { font-size: 1rem; padding: 0.4rem; }
+  input[type=text] { width: 10rem; }
+  button { font-size: 1rem; padding: 0.55rem 1.1rem; border-radius: 0.5rem; cursor: pointer; border: 1px solid #ccc; background: #f7f7f7; }
+  button#call { background: #16a34a; color: #fff; border-color: #16a34a; }
+  button#call.active { background: #dc2626; border-color: #dc2626; }
+  #status { margin: 0.5rem 0 1rem; color: #555; }
+  #transcript { border: 1px solid #ddd; border-radius: 0.5rem; height: 22rem; overflow-y: auto;
+                padding: 0.75rem; background: #fafafa; }
+  #transcript:empty::before { content: "Transcript will appear here once the call starts."; color: #aaa; }
+  .line { margin-bottom: 0.6rem; line-height: 1.4; }
+  .line .who { font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .line.user .who { color: #2563eb; }
+  .line.assistant .who { color: #16a34a; }
+  .line .txt { display: block; }
 </style>
 </head>
 <body>
   <h1>Sales Agent</h1>
-  <label>Lead name: <input id="lead" value="there" /></label>
-  <button id="call">Start call</button>
+
+  <div class="row">
+    <label>Product / campaign
+      <select id="campaign"></select>
+    </label>
+    <label>Upload campaign (.md)
+      <input type="file" id="file" accept=".md,.markdown,text/markdown" />
+    </label>
+    <button id="upload">Upload</button>
+  </div>
+
+  <div class="row">
+    <label>Lead name
+      <input type="text" id="lead" value="there" />
+    </label>
+    <button id="call">Start call</button>
+  </div>
+
   <div id="status">Idle.</div>
+  <div id="transcript"></div>
 
 <script>
 const SAMPLE_RATE = 24000;       // OpenAI realtime pcm16 mono
 let ctx, micStream, node, ws, playHead = 0, calling = false;
 let scheduledSources = [];
+const assistantLines = {};       // item_id -> .txt element being streamed
 const statusEl = document.getElementById("status");
 const btn = document.getElementById("call");
+const campaignSel = document.getElementById("campaign");
+const transcriptEl = document.getElementById("transcript");
 
 function setStatus(s) { statusEl.textContent = s; }
 
+// ---- Campaign list + upload -------------------------------------------------
+async function loadCampaigns() {
+  try {
+    const data = await (await fetch("/campaigns")).json();
+    campaignSel.innerHTML = "";
+    for (const c of data.campaigns) {
+      const opt = document.createElement("option");
+      opt.value = c.file;
+      opt.textContent = (c.product ? c.product + "  (" + c.file + ")" : c.file) + (c.valid ? "" : "  — invalid");
+      opt.disabled = !c.valid;
+      if (c.file === data.default) opt.selected = true;
+      campaignSel.appendChild(opt);
+    }
+    if (!data.campaigns.length) {
+      const opt = document.createElement("option");
+      opt.textContent = "(no campaigns found)";
+      opt.disabled = true;
+      campaignSel.appendChild(opt);
+    }
+  } catch (e) { setStatus("Could not load campaigns: " + e.message); }
+}
+
+document.getElementById("upload").onclick = async () => {
+  const f = document.getElementById("file").files[0];
+  if (!f) { setStatus("Pick a .md file first."); return; }
+  setStatus("Uploading " + f.name + "…");
+  const text = await f.text();
+  const res = await fetch("/campaigns?file=" + encodeURIComponent(f.name), {
+    method: "POST", headers: { "Content-Type": "text/markdown" }, body: text,
+  });
+  const body = await res.json();
+  if (!res.ok || !body.ok) { setStatus("Upload rejected: " + (body.error || res.status)); return; }
+  setStatus("Uploaded '" + body.product + "' (" + body.file + ").");
+  await loadCampaigns();
+  campaignSel.value = body.file;
+};
+
+// ---- Transcript -------------------------------------------------------------
+function addLine(role, text) {
+  const line = document.createElement("div");
+  line.className = "line " + role;
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = role === "user" ? "You" : "Agent";
+  const txt = document.createElement("span");
+  txt.className = "txt";
+  txt.textContent = text || "";
+  line.appendChild(who); line.appendChild(txt);
+  transcriptEl.appendChild(line);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  return txt;
+}
+
+function handleTranscript(msg) {
+  if (msg.role === "assistant") {
+    let txt = assistantLines[msg.item_id];
+    if (!txt) { txt = addLine("assistant", ""); assistantLines[msg.item_id] = txt; }
+    txt.textContent += msg.delta || "";
+  } else {
+    addLine("user", msg.text || "");
+  }
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+// ---- Audio ------------------------------------------------------------------
 function floatToPCM16(float32) {
   const out = new Int16Array(float32.length);
   for (let i = 0; i < float32.length; i++) {
@@ -67,6 +165,9 @@ function playChunk(arrayBuffer) {
 }
 
 async function startCall() {
+  transcriptEl.innerHTML = "";
+  for (const k in assistantLines) delete assistantLines[k];
+
   ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const source = ctx.createMediaStreamSource(micStream);
@@ -75,8 +176,9 @@ async function startCall() {
   node.connect(ctx.destination);
 
   const lead = encodeURIComponent(document.getElementById("lead").value || "there");
+  const campaign = encodeURIComponent(campaignSel.value || "");
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/session?lead_name=${lead}`);
+  ws = new WebSocket(`${proto}://${location.host}/session?lead_name=${lead}&campaign=${campaign}`);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => setStatus("Connected — talk!");
@@ -84,6 +186,7 @@ async function startCall() {
     if (typeof ev.data === "string") {
       const msg = JSON.parse(ev.data);
       if (msg.type === "interrupted") flushPlayback();
+      else if (msg.type === "transcript") handleTranscript(msg);
       return;
     }
     playChunk(ev.data);
@@ -102,6 +205,8 @@ function cleanup() {
   calling = false;
   scheduledSources = [];
   btn.textContent = "Start call";
+  btn.classList.remove("active");
+  campaignSel.disabled = false;
   if (node) { node.disconnect(); node.onaudioprocess = null; }
   if (micStream) micStream.getTracks().forEach((t) => t.stop());
   if (ctx) ctx.close();
@@ -111,10 +216,14 @@ btn.onclick = async () => {
   if (calling) { if (ws) ws.close(); return; }
   calling = true;
   btn.textContent = "End call";
+  btn.classList.add("active");
+  campaignSel.disabled = true;
   setStatus("Connecting…");
   try { await startCall(); }
   catch (err) { setStatus("Mic/connection failed: " + err.message); cleanup(); }
 };
+
+loadCampaigns();
 </script>
 </body>
 </html>

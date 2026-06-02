@@ -21,13 +21,18 @@ class FakeTransport:
     def __init__(self, incoming):
         self._incoming = list(incoming)
         self.sent = []
+        self.events = []
         self.interrupted = False
         self.closed = False
     async def recv_audio(self):
         return self._incoming.pop(0) if self._incoming else None
     async def send_audio(self, audio): self.sent.append(audio)
+    async def send_event(self, event): self.events.append(event)
     async def notify_interrupted(self): self.interrupted = True
     async def close(self): self.closed = True
+
+def _raw_event(model_data):
+    return SimpleNamespace(type="raw_model_event", data=model_data)
 
 def _audio_event(data):
     return SimpleNamespace(type="audio", audio=SimpleNamespace(data=data))
@@ -45,6 +50,24 @@ async def test_downlink_forwards_audio_and_interrupt():
     await _agent(session)._pump_downlink(session, transport)
     assert transport.sent == [b"OUT"]
     assert transport.interrupted is True
+
+async def test_downlink_forwards_assistant_and_user_transcripts():
+    assistant = SimpleNamespace(type="transcript_delta", item_id="a1", delta="Hello", response_id="r1")
+    user = SimpleNamespace(type="input_audio_transcription_completed", item_id="u1", transcript="Hi there")
+    session = FakeSession([_raw_event(assistant), _raw_event(user)])
+    transport = FakeTransport([])
+    await _agent(session)._pump_downlink(session, transport)
+    assert transport.events == [
+        {"type": "transcript", "role": "assistant", "item_id": "a1", "delta": "Hello", "final": False},
+        {"type": "transcript", "role": "user", "item_id": "u1", "text": "Hi there", "final": True},
+    ]
+
+async def test_downlink_ignores_other_raw_model_events():
+    other = SimpleNamespace(type="some_other_event")
+    session = FakeSession([_raw_event(other)])
+    transport = FakeTransport([])
+    await _agent(session)._pump_downlink(session, transport)
+    assert transport.events == []
 
 async def test_uplink_forwards_frames_until_none():
     session = FakeSession([])
