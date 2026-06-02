@@ -110,6 +110,9 @@ persona:
   name: "Alex"
   role: "sales rep at Acme"
   tone: "warm, concise, never pushy"
+  voice: "marin"                 # OpenAI realtime voice; default "marin"
+                                 # options: marin, cedar, alloy, ash, ballad,
+                                 # coral, echo, sage, shimmer, verse
 goal:
   type: book_follow_up
   success: "a callback or demo is booked via book_slot"
