@@ -48,3 +48,9 @@ def test_accent_included_when_set():
 def test_accent_absent_when_not_set():
     out = build_instructions(_campaign(), lead_name="Dana")
     assert "accent" not in out.lower()
+
+def test_delivery_section_pushes_human_natural_voice():
+    out = build_instructions(_campaign(), lead_name="Dana").lower()
+    assert "monotone" in out          # explicitly forbids monotone
+    assert "human" in out             # asks for a human delivery
+    assert "listen" in out            # conversational, not a monologue
