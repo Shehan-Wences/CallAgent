@@ -1,0 +1,13 @@
+services:
+  agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in your shell or .env}
+      CAMPAIGN: campaigns/acmecrm.md
+      MODEL: ${MODEL:-gpt-realtime-mini}
+      BOOKINGS_PATH: /data/bookings.json
+    volumes:
+      - ./campaigns:/app/campaigns
+      - ./data:/data

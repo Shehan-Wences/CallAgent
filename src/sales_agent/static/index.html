@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sales Agent — Call Console</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; }
+  button { font-size: 1rem; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; }
+  #status { margin-top: 1rem; color: #555; }
+  label { display: block; margin-bottom: 1rem; }
+  input { font-size: 1rem; padding: 0.4rem; width: 12rem; }
+</style>
+</head>
+<body>
+  <h1>Sales Agent</h1>
+  <label>Lead name: <input id="lead" value="there" /></label>
+  <button id="call">Start call</button>
+  <div id="status">Idle.</div>
+
+<script>
+const SAMPLE_RATE = 24000;       // OpenAI realtime pcm16 mono
+let ctx, micStream, node, ws, playHead = 0, calling = false;
+let scheduledSources = [];
+const statusEl = document.getElementById("status");
+const btn = document.getElementById("call");
+
+function setStatus(s) { statusEl.textContent = s; }
+
+function floatToPCM16(float32) {
+  const out = new Int16Array(float32.length);
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
+function pcm16ToFloat(int16) {
+  const out = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) out[i] = int16[i] / 0x8000;
+  return out;
+}
+
+function flushPlayback() {
+  for (const s of scheduledSources) {
+    try { s.stop(); } catch (e) { /* already stopped */ }
+  }
+  scheduledSources = [];
+  if (ctx) playHead = ctx.currentTime;
+}
+
+function playChunk(arrayBuffer) {
+  const int16 = new Int16Array(arrayBuffer);
+  const float = pcm16ToFloat(int16);
+  const buf = ctx.createBuffer(1, float.length, SAMPLE_RATE);
+  buf.copyToChannel(float, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  const now = ctx.currentTime;
+  if (playHead < now) playHead = now;
+  src.start(playHead);
+  playHead += buf.duration;
+  scheduledSources.push(src);
+  src.onended = () => { scheduledSources = scheduledSources.filter((s) => s !== src); };
+}
+
+async function startCall() {
+  ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const source = ctx.createMediaStreamSource(micStream);
+  node = ctx.createScriptProcessor(4096, 1, 1);
+  source.connect(node);
+  node.connect(ctx.destination);
+
+  const lead = encodeURIComponent(document.getElementById("lead").value || "there");
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/session?lead_name=${lead}`);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => setStatus("Connected — talk!");
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "interrupted") flushPlayback();
+      return;
+    }
+    playChunk(ev.data);
+  };
+  ws.onclose = () => { setStatus("Call ended."); cleanup(); };
+  ws.onerror = () => setStatus("Connection error.");
+
+  node.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const pcm = floatToPCM16(e.inputBuffer.getChannelData(0));
+    ws.send(pcm.buffer);
+  };
+}
+
+function cleanup() {
+  calling = false;
+  scheduledSources = [];
+  btn.textContent = "Start call";
+  if (node) { node.disconnect(); node.onaudioprocess = null; }
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (ctx) ctx.close();
+}
+
+btn.onclick = async () => {
+  if (calling) { if (ws) ws.close(); return; }
+  calling = true;
+  btn.textContent = "End call";
+  setStatus("Connecting…");
+  try { await startCall(); }
+  catch (err) { setStatus("Mic/connection failed: " + err.message); cleanup(); }
+};
+</script>
+</body>
+</html>
