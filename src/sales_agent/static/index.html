@@ -169,7 +169,11 @@ async function startCall() {
   for (const k in assistantLines) delete assistantLines[k];
 
   ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  // Echo cancellation stops the mic from hearing the agent's own voice through
+  // the speakers (which otherwise makes the agent interrupt itself).
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
   const source = ctx.createMediaStreamSource(micStream);
   node = ctx.createScriptProcessor(4096, 1, 1);
   source.connect(node);
