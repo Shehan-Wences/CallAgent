@@ -8,6 +8,7 @@ class FakeWS:
         self.sent_bytes = []
         self.sent_text = []
         self.closed = False
+        self.close_count = 0
     async def receive_bytes(self):
         if not self._incoming:
             from starlette.websockets import WebSocketDisconnect
@@ -19,6 +20,7 @@ class FakeWS:
         self.sent_text.append(text)
     async def close(self):
         self.closed = True
+        self.close_count += 1
 
 async def test_recv_audio_returns_frames_then_none_on_disconnect():
     ws = FakeWS([b"A", b"B"])
@@ -45,3 +47,8 @@ async def test_close_closes_ws_once():
     await t.close()
     await t.close()
     assert ws.closed is True
+    assert ws.close_count == 1
+
+def test_browser_transport_satisfies_audio_transport_protocol():
+    from sales_agent.transport import AudioTransport
+    assert isinstance(BrowserWebSocketTransport(FakeWS([])), AudioTransport)
