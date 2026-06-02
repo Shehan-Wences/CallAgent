@@ -47,11 +47,15 @@ class RealtimeSalesAgent:
             up = asyncio.create_task(self._pump_uplink(transport, session))
             down = asyncio.create_task(self._pump_downlink(session, transport))
             try:
-                await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
-            finally:
-                for task in (up, down):
+                done, pending = await asyncio.wait(
+                    {up, down}, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
                     task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+            finally:
                 await transport.close()
+            for task in done:
+                task.result()  # re-raise a genuine session/transport error, not swallow it
 
     async def _pump_uplink(self, transport, session) -> None:
         while True:

@@ -21,6 +21,7 @@
 <script>
 const SAMPLE_RATE = 24000;       // OpenAI realtime pcm16 mono
 let ctx, micStream, node, ws, playHead = 0, calling = false;
+let scheduledSources = [];
 const statusEl = document.getElementById("status");
 const btn = document.getElementById("call");
 
@@ -41,6 +42,14 @@ function pcm16ToFloat(int16) {
   return out;
 }
 
+function flushPlayback() {
+  for (const s of scheduledSources) {
+    try { s.stop(); } catch (e) { /* already stopped */ }
+  }
+  scheduledSources = [];
+  if (ctx) playHead = ctx.currentTime;
+}
+
 function playChunk(arrayBuffer) {
   const int16 = new Int16Array(arrayBuffer);
   const float = pcm16ToFloat(int16);
@@ -53,6 +62,8 @@ function playChunk(arrayBuffer) {
   if (playHead < now) playHead = now;
   src.start(playHead);
   playHead += buf.duration;
+  scheduledSources.push(src);
+  src.onended = () => { scheduledSources = scheduledSources.filter((s) => s !== src); };
 }
 
 async function startCall() {
@@ -72,7 +83,7 @@ async function startCall() {
   ws.onmessage = (ev) => {
     if (typeof ev.data === "string") {
       const msg = JSON.parse(ev.data);
-      if (msg.type === "interrupted") playHead = ctx.currentTime;  // flush playback
+      if (msg.type === "interrupted") flushPlayback();
       return;
     }
     playChunk(ev.data);
@@ -89,6 +100,7 @@ async function startCall() {
 
 function cleanup() {
   calling = false;
+  scheduledSources = [];
   btn.textContent = "Start call";
   if (node) { node.disconnect(); node.onaudioprocess = null; }
   if (micStream) micStream.getTracks().forEach((t) => t.stop());

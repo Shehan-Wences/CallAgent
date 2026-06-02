@@ -58,3 +58,18 @@ async def test_run_sends_greeting_and_closes_transport():
     await _agent(session).run(transport)
     assert len(session.messages) == 1
     assert transport.closed is True
+
+class ExplodingSession(FakeSession):
+    def __aiter__(self):
+        async def gen():
+            raise RuntimeError("session blew up")
+            yield  # pragma: no cover  (makes this an async generator)
+        return gen()
+
+async def test_run_reraises_downlink_error():
+    import pytest
+    session = ExplodingSession([])
+    transport = FakeTransport([None])
+    with pytest.raises(RuntimeError, match="session blew up"):
+        await _agent(session).run(transport)
+    assert transport.closed is True
