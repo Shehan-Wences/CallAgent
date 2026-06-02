@@ -8,6 +8,11 @@ services:
       CAMPAIGN: campaigns/acmecrm.md
       MODEL: ${MODEL:-gpt-realtime-mini}
       BOOKINGS_PATH: /data/bookings.json
+      # Phone calls (optional) — leave blank to disable. See .env.example.
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      PUBLIC_HOST: ${PUBLIC_HOST:-}
     volumes:
       - ./campaigns:/app/campaigns
       - ./data:/data

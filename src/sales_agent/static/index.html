@@ -45,6 +45,13 @@
     <button id="call">Start call</button>
   </div>
 
+  <div class="row">
+    <label>Phone number (E.164)
+      <input type="text" id="phonenum" placeholder="+61412345678" />
+    </label>
+    <button id="phone">Call phone (Twilio)</button>
+  </div>
+
   <div id="status">Idle.</div>
   <div id="transcript"></div>
 
@@ -225,6 +232,45 @@ btn.onclick = async () => {
   setStatus("Connecting…");
   try { await startCall(); }
   catch (err) { setStatus("Mic/connection failed: " + err.message); cleanup(); }
+};
+
+// ---- Phone call via Twilio (audio is on the phone; we only watch the transcript) ----
+let monitorWs = null;
+const phoneBtn = document.getElementById("phone");
+
+phoneBtn.onclick = async () => {
+  const phone = document.getElementById("phonenum").value.trim();
+  if (!phone) { setStatus("Enter a phone number in E.164 format, e.g. +61412345678."); return; }
+  transcriptEl.innerHTML = "";
+  for (const k in assistantLines) delete assistantLines[k];
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  setStatus("Setting up call…");
+  monitorWs = new WebSocket(`${proto}://${location.host}/monitor`);
+  monitorWs.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "call_id") {
+      setStatus("Dialing " + phone + "…");
+      const res = await fetch("/call", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone, call_id: msg.call_id,
+          campaign: campaignSel.value || "",
+          lead_name: document.getElementById("lead").value || "there",
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.ok) {
+        setStatus("Call failed: " + (body.error || res.status));
+        if (monitorWs) monitorWs.close();
+      }
+    } else if (msg.type === "transcript") {
+      handleTranscript(msg);
+    } else if (msg.type === "status") {
+      setStatus("Phone: " + msg.status + (msg.phone ? " (" + msg.phone + ")" : ""));
+    }
+  };
+  monitorWs.onerror = () => setStatus("Monitor connection error.");
 };
 
 loadCampaigns();

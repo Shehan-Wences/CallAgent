@@ -31,7 +31,9 @@ def _turn_detection() -> dict:
     }
 
 
-async def default_session_factory(instructions: str, voice: str, model: str, tools: list):
+async def default_session_factory(instructions: str, voice: str, model: str, tools: list,
+                                  audio_format: str = "pcm16"):
+    # pcm16 (24 kHz) for the browser; g711_ulaw (8 kHz) for a Twilio phone leg.
     agent = RealtimeAgent(name="sales_agent", instructions=instructions, tools=tools)
     runner = RealtimeRunner(
         starting_agent=agent,
@@ -41,14 +43,14 @@ async def default_session_factory(instructions: str, voice: str, model: str, too
                 "instructions": instructions,
                 "audio": {
                     "input": {
-                        "format": "pcm16",
+                        "format": audio_format,
                         "turn_detection": _turn_detection(),
                         # Suppress background noise so it doesn't trip the VAD.
                         "noise_reduction": {"type": "near_field"},
                         # Transcribe the caller's speech so the browser can show a live transcript.
                         "transcription": {"model": "gpt-4o-mini-transcribe"},
                     },
-                    "output": {"format": "pcm16", "voice": voice},
+                    "output": {"format": audio_format, "voice": voice},
                 },
             }
         },
@@ -57,16 +59,19 @@ async def default_session_factory(instructions: str, voice: str, model: str, too
 
 class RealtimeSalesAgent:
     def __init__(self, instructions: str, voice: str, model: str, tools: list,
-                 session_factory: SessionFactory = default_session_factory):
+                 session_factory: SessionFactory = default_session_factory,
+                 audio_format: str = "pcm16"):
         self._instructions = instructions
         self._voice = voice
         self._model = model
         self._tools = tools
         self._session_factory = session_factory
+        self._audio_format = audio_format
 
     async def run(self, transport) -> None:
         session = await self._session_factory(
-            self._instructions, self._voice, self._model, self._tools)
+            self._instructions, self._voice, self._model, self._tools,
+            audio_format=self._audio_format)
         async with session:
             await session.send_message(GREETING_TRIGGER)
             up = asyncio.create_task(self._pump_uplink(transport, session))

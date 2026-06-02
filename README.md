@@ -20,6 +20,36 @@ Add a file under `campaigns/` (copy `acmecrm.md`), then set `CAMPAIGN` to it in
 `docker-compose.yml` (or `-e CAMPAIGN=campaigns/yours.md`) and restart. No rebuild
 needed — `campaigns/` is mounted.
 
+## Phone calls (Twilio outbound)
+
+Initiate a real outbound phone call from the UI; the agent talks over the phone
+while the **transcript still streams to your screen**.
+
+You need a Twilio account, a Twilio number to call from, and a public URL Twilio
+can reach (Twilio can't reach `localhost`). For local testing, tunnel it:
+
+```bash
+ngrok http 8000        # copy the host, e.g. abc123.ngrok-free.app
+```
+
+Put the values in `.env` (see `.env.example`):
+
+```
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_AUTH_TOKEN=...
+TWILIO_FROM_NUMBER=+1...
+PUBLIC_HOST=abc123.ngrok-free.app
+```
+
+Then `docker compose up`, open http://localhost:8000, pick a campaign, enter the
+prospect's number in **E.164** (e.g. `+61412345678`), and click **Call phone
+(Twilio)**. Audio rides the phone; transcript + status appear on screen.
+
+How it works: the browser opens a `/monitor` WebSocket (transcript/status only),
+`POST /call` originates the call via Twilio with a `<Stream>` pointed at
+`/twilio-stream`, and that stream bridges the phone's μ-law audio to OpenAI
+Realtime. Per-minute Twilio cost is on top of the model cost (~$0.018/min US).
+
 ## Models
 
 `MODEL=gpt-realtime-mini` (default, cheap, for dev) or `MODEL=gpt-realtime`
@@ -39,10 +69,11 @@ OPENAI_API_KEY=sk-... python -m sales_agent serve --campaign campaigns/acmecrm.m
 - `campaign.py` — load a hybrid YAML+Markdown campaign file.
 - `instructions.py` — compile a campaign into the agent's system prompt.
 - `booking.py` / `tools.py` — `book_slot` and `log_outcome` tools writing to a JSON store.
-- `transport.py` — `AudioTransport` interface; `BrowserWebSocketTransport` for Phase 1.
-- `agent.py` — `RealtimeSalesAgent` bridges the browser audio to the OpenAI Realtime session.
-- `server.py` / `__main__.py` — FastAPI server + `serve` CLI.
-- `static/index.html` — browser call console (mic capture + playback).
+- `transport.py` — `AudioTransport` interface; `BrowserWebSocketTransport` (browser mic).
+- `twilio_transport.py` — `TwilioMediaStreamTransport` (phone audio over Twilio Media Streams).
+- `agent.py` — `RealtimeSalesAgent` bridges either transport to the OpenAI Realtime session.
+- `server.py` / `__main__.py` — FastAPI server (`/session` browser, `/monitor` + `/call` + `/twilio-stream` phone) + `serve` CLI.
+- `static/index.html` — call console: browser call (mic) or phone call (Twilio), with live transcript.
 
-Phase 2 (telephony) swaps `BrowserWebSocketTransport` for a Twilio transport
-behind the same interface.
+Both transports implement the same `AudioTransport` interface, so the agent
+brain is identical whether the call is in the browser or over the phone.

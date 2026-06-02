@@ -38,7 +38,7 @@ def _audio_event(data):
     return SimpleNamespace(type="audio", audio=SimpleNamespace(data=data))
 
 def _agent(session):
-    async def factory(instructions, voice, model, tools):
+    async def factory(instructions, voice, model, tools, audio_format="pcm16"):
         return session
     return RealtimeSalesAgent("instr", "marin", "gpt-realtime-mini", [],
                              session_factory=factory)
