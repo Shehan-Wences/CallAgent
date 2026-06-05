@@ -173,6 +173,18 @@ Contributions are welcome! Please read **[CONTRIBUTING.md](CONTRIBUTING.md)**. I
 
 ---
 
+## 🔒 Security
+
+Found a vulnerability? Please report it privately — see **[SECURITY.md](SECURITY.md)**. And don't expose `/call` publicly without authentication; it will dial any number it's given.
+
+---
+
+## 🤖 Built with Claude
+
+This project was designed, built, and documented with the help of [Claude](https://claude.ai) (Anthropic) — from the initial architecture and tests through the Twilio integration and these docs.
+
+---
+
 ## 📄 License
 
 [MIT](LICENSE) © Shehan Wences
